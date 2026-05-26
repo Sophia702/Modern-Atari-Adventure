@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Adventure</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #08090d;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100vh; font-family: monospace;
+  }
+  canvas {
+    image-rendering: pixelated;
+    border: 2px solid #333;
+    box-shadow: 0 0 32px rgba(80,60,20,0.5);
+  }
+  #ui {
+    color: #888; font-size: 13px;
+    margin-top: 8px; text-align: center; letter-spacing: 0.5px;
+  }
+  #title-screen {
+    color: #fff; text-align: center;
+    display: none; flex-direction: column; align-items: center; gap: 14px;
+    background: radial-gradient(ellipse at center, #1a1508 0%, #08090d 70%);
+    width: 560px; padding: 40px 20px;
+    border: 2px solid #443300;
+    box-shadow: 0 0 40px rgba(255,200,0,0.12);
+  }
+  #title-screen h1 {
+    font-size: 56px; color: #ffd700; letter-spacing: 6px;
+    text-shadow: 0 0 20px rgba(255,215,0,0.6), 0 2px 0 #7a5a00;
+  }
+  #title-screen .sub     { font-size: 13px; color: #666; letter-spacing: 1px; }
+  #title-screen .tagline { font-size: 15px; color: #cc9900; margin: 4px 0; }
+  .btn {
+    background: linear-gradient(180deg, #3a2e08 0%, #1e1804 100%);
+    color: #ffd700; border: 1px solid #7a6010;
+    padding: 10px 28px; font-size: 15px; cursor: pointer;
+    font-family: monospace; margin: 4px; letter-spacing: 1px;
+    transition: all 0.15s;
+  }
+  .btn:hover {
+    background: linear-gradient(180deg, #5a4a10 0%, #3a2e08 100%);
+    border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.3);
+  }
+  .controls { color: #555; font-size: 12px; line-height: 1.8; }
+</style>
+</head>
+<body>
+
+<div id="title-screen">
+  <h1>ADVENTURE</h1>
+  <div class="sub">Based on Atari 2600 Adventure (1980)</div>
+  <div class="tagline">Find the Enchanted Chalice — return it to the Golden Castle!</div>
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+    <button class="btn" onclick="startGame(1)">Game 1 &mdash; Easy</button>
+    <button class="btn" onclick="startGame(2)">Game 2 &mdash; Normal</button>
+    <button class="btn" onclick="startGame(3)">Game 3 &mdash; Random</button>
+  </div>
+  <div class="controls" style="margin-top:10px">
+    Arrow Keys / WASD &nbsp;&bull;&nbsp; Move<br>
+    Space &nbsp;&bull;&nbsp; Pick Up / Drop
+    &nbsp;&bull;&nbsp; N &nbsp;&bull;&nbsp; Room names
+    &nbsp;&bull;&nbsp; M &nbsp;&bull;&nbsp; Minimap
+  </div>
+</div>
+
+<canvas id="c" width="560" height="420"></canvas>
+<div id="ui"></div>
+
+<!-- load order: canvas → data → state → input → physics → dragons → draw → game -->
+<script src="js/canvas.js"></script>
+<script src="js/constants.js"></script>
+<script src="js/state.js"></script>
+<script src="js/input.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/dragons.js"></script>
+<script src="js/draw.js"></script>
+<script src="js/game.js"></script>
+
+</body>
+</html>
