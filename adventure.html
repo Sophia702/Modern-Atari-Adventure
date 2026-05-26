@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Adventure</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; }
+  canvas { image-rendering: pixelated; border: 2px solid #444; }
+  #ui { color: #fff; font-size: 14px; margin-top: 8px; text-align: center; }
+  #title-screen { color: #fff; text-align: center; display: none; flex-direction: column; align-items: center; gap: 12px; }
+  #title-screen h1 { font-size: 48px; color: #ff0; letter-spacing: 4px; }
+  #title-screen p { font-size: 16px; color: #aaa; }
+  .btn { background: #333; color: #fff; border: 2px solid #888; padding: 10px 24px; font-size: 16px; cursor: pointer; font-family: monospace; margin: 4px; }
+  .btn:hover { background: #555; border-color: #fff; }
+</style>
+</head>
+<body>
+<div id="title-screen">
+  <h1>ADVENTURE</h1>
+  <p>Based on Atari 2600 Adventure (1980)</p>
+  <p style="color:#ff8;margin-top:8px">Find the Enchanted Chalice and return it to the Golden Castle!</p>
+  <div style="margin-top:16px">
+    <button class="btn" onclick="startGame(1)">Game 1 — Easy</button>
+    <button class="btn" onclick="startGame(2)">Game 2 — Normal</button>
+    <button class="btn" onclick="startGame(3)">Game 3 — Hard (Random)</button>
+  </div>
+  <div style="margin-top:16px;color:#888;font-size:13px">
+    Arrow Keys / WASD — Move &nbsp;|&nbsp; Space — Pick Up / Drop &nbsp;|&nbsp; N — Room names &nbsp;|&nbsp; M — Toggle minimap
+  </div>
+</div>
+<canvas id="c" width="560" height="420"></canvas>
+<div id="ui"></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 560, H = 420;
+const TW = W, TH = H;
+
+// ── Palette ──────────────────────────────────────────────────────────────────
+const C = {
+  black:'#000000', white:'#FFFFFF', red:'#FF0000', cyan:'#00FFFF',
+  purple:'#9900FF', green:'#00CC00', blue:'#0000FF', yellow:'#FFFF00',
+  orange:'#FF8800', ltblue:'#88CCFF', ltgreen:'#88FF88', pink:'#FF88FF',
+  gray:'#888888', ltgray:'#CCCCCC', tan:'#CC8844', gold:'#FFD700'
+};
+
+// ── Room definitions ─────────────────────────────────────────────────────────
+// Each room: { name, bg, walls[], exits:{N,S,E,W} -> room index, locked (key color) }
+// walls: array of {x,y,w,h} in grid units (room is 20x15 grid, pixel = grid*28)
+const GX = 28; // grid size in pixels
+const COLS = 20, ROWS = 15;
+const PW = COLS * GX; // 560
+const PH = ROWS * GX; // 420
+
+// Door positions encoded as exit openings in walls
+// Rooms array - 0-indexed
+const rooms = [
+  // 0: Start Room (Yellow Castle interior)
+  { name:"Yellow Castle", bg:C.black, color:C.yellow,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ E:1 }, locked:{}, items:[] },
+  // 1: East of Start
+  { name:"Field", bg:C.black, color:C.ltgreen,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ W:0, E:2, N:5 }, locked:{}, items:[] },
+  // 2: Blue Maze entry
+  { name:"Blue Maze", bg:C.blue, color:C.white,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15},
+            {x:3,y:2,w:6,h:1},{x:3,y:2,w:1,h:5},{x:9,y:2,w:1,h:3},{x:3,y:7,w:7,h:1},
+            {x:12,y:4,w:6,h:1},{x:12,y:4,w:1,h:4},{x:18,y:4,w:1,h:4},{x:12,y:8,w:6,h:1},
+            {x:5,y:10,w:8,h:1},{x:5,y:10,w:1,h:3},{x:13,y:10,w:1,h:3} ],
+    exits:{ W:1, E:3, S:7 }, locked:{}, items:[] },
+  // 3: Copper Key Room
+  { name:"Copper Room", bg:C.black, color:C.orange,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ W:2, N:8 }, locked:{}, items:['copperKey'] },
+  // 4: Gold Castle interior
+  { name:"Gold Castle", bg:C.black, color:C.gold,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ S:0 }, locked:{ S:'goldKey' }, items:['chalice'] },
+  // 5: North Field
+  { name:"North Field", bg:C.black, color:C.green,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ S:1, E:6, N:9 }, locked:{}, items:[] },
+  // 6: Jade Key Room
+  { name:"Jade Room", bg:C.black, color:C.ltgreen,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ W:5 }, locked:{}, items:['jadeKey'] },
+  // 7: Catacombs
+  { name:"Catacombs", bg:C.black, color:C.gray,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15},
+            {x:2,y:3,w:16,h:1},{x:2,y:3,w:1,h:4},{x:18,y:3,w:1,h:4},{x:2,y:7,w:16,h:1},
+            {x:2,y:11,w:16,h:1},{x:2,y:11,w:1,h:2},{x:18,y:11,w:1,h:2} ],
+    exits:{ N:2, S:11, W:10 }, locked:{}, items:[] },
+  // 8: Gold Key Room
+  { name:"Gold Key Room", bg:C.black, color:C.gold,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ S:3, E:12 }, locked:{ E:'copperKey' }, items:['goldKey'] },
+  // 9: Northwest Passage
+  { name:"Northwest Pass", bg:C.black, color:C.cyan,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ S:5, E:13 }, locked:{}, items:[] },
+  // 10: Sword Room
+  { name:"Sword Chamber", bg:C.black, color:C.white,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ E:7 }, locked:{}, items:['sword'] },
+  // 11: Red Labyrinth
+  { name:"Red Labyrinth", bg:C.black, color:C.red,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15},
+            {x:4,y:2,w:1,h:10},{x:8,y:2,w:1,h:5},{x:8,y:9,w:1,h:4},
+            {x:12,y:4,w:1,h:7},{x:16,y:2,w:1,h:10} ],
+    exits:{ N:7, E:14 }, locked:{}, items:[] },
+  // 12: White Castle interior
+  { name:"White Castle", bg:C.black, color:C.white,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ W:8 }, locked:{ W:'jadeKey' }, items:['bridge'] },
+  // 13: Dragon Lair
+  { name:"Dragon Lair", bg:C.black, color:C.red,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ W:9, S:14 }, locked:{}, items:[] },
+  // 14: Chalice Room / ante
+  { name:"East Keep", bg:C.black, color:C.purple,
+    walls:[ {x:0,y:0,w:20,h:1},{x:0,y:14,w:20,h:1},{x:0,y:0,w:1,h:15},{x:19,y:0,w:1,h:15} ],
+    exits:{ W:11, N:13 }, locked:{}, items:['magnet'] },
+];
+
+// ── Items ─────────────────────────────────────────────────────────────────────
+const ITEMS = {
+  sword:      { name:'Sword',       color:C.yellow, shape:'sword' },
+  goldKey:    { name:'Gold Key',    color:C.gold,   shape:'key' },
+  copperKey:  { name:'Copper Key',  color:C.orange, shape:'key' },
+  jadeKey:    { name:'Jade Key',    color:C.ltgreen,shape:'key' },
+  bridge:     { name:'Bridge',      color:C.tan,    shape:'bridge' },
+  chalice:    { name:'Chalice',     color:C.gold,   shape:'chalice' },
+  magnet:     { name:'Magnet',      color:C.ltblue, shape:'magnet' },
+  dot:        { name:'Dot',         color:C.white,  shape:'dot' },
+};
+
+// ── Dragons ───────────────────────────────────────────────────────────────────
+// Yorgle=yellow, Grundle=green, Rhindle=red
+const DRAGON_DEFS = [
+  { name:'Yorgle',  color:C.yellow, homeRoom:13, fearsSword:true,  speed:1.5 },
+  { name:'Grundle', color:C.green,  homeRoom:7,  fearsSword:false, speed:1.2 },
+  { name:'Rhindle', color:C.red,    homeRoom:11, fearsSword:true,  speed:1.8 },
+];
+
+// ── Game State ────────────────────────────────────────────────────────────────
+let state = 'title';
+let gameNumber = 1;
+let showNames = false;
+let showMinimap = true;
+let visitedRooms = new Set();
+let won = false;
+let gameOverMsg = '';
+
+let player;
+let carrying;   // item id or null
+let dragons;
+let roomItems;  // roomIndex -> [itemId, ...]
+let flashTimer = 0;
+let stepCount = 0; // for walk animation
+
+function startGame(n) {
+  gameNumber = n;
+  won = false;
+  gameOverMsg = '';
+  showNames = false;
+
+  player = { x: 9*GX, y: 7*GX, room: 0, w: GX*0.8, h: GX*0.8, dx: 0, dy: 0, facing: 'S' };
+  stepCount = 0;
+  carrying = null;
+  visitedRooms = new Set([0]);
+
+  // Place items per room definition (deep copy)
+  roomItems = {};
+  for (let i = 0; i < rooms.length; i++) roomItems[i] = [...rooms[i].items];
+
+  // For game 3, randomize item placement
+  if (n === 3) randomizeItems();
+
+  // Init dragons
+  dragons = DRAGON_DEFS.map((d, i) => ({
+    ...d,
+    x: 10*GX, y: 7*GX,
+    room: d.homeRoom,
+    alive: true,
+    carrying: null,
+    state: 'wander',
+    timer: Math.random() * 60,
+    targetX: 10*GX, targetY: 7*GX,
+  }));
+
+  state = 'playing';
+  canvas.style.display = 'block';
+  document.getElementById('title-screen').style.display = 'none';
+}
+
+function randomizeItems() {
+  // Collect all items, clear, re-place randomly
+  const all = [];
+  for (let i = 0; i < rooms.length; i++) {
+    all.push(...roomItems[i]);
+    roomItems[i] = [];
+  }
+  // Shuffle
+  for (let i = all.length-1; i > 0; i--) {
+    const j = Math.floor(Math.random()*(i+1));
+    [all[i],all[j]] = [all[j],all[i]];
+  }
+  all.forEach((item, idx) => {
+    const r = idx % rooms.length;
+    roomItems[r].push(item);
+  });
+  // Always put dot in room 2 for game 3
+  if (!roomItems[2].includes('dot')) roomItems[2].push('dot');
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ' && state === 'playing') { e.preventDefault(); interact(); }
+  if (e.key === 'n' || e.key === 'N') showNames = !showNames;
+  if (e.key === 'm' || e.key === 'M') showMinimap = !showMinimap;
+  if ((e.key === 'r' || e.key === 'R') && (state === 'gameover' || state === 'win')) showTitle();
+  if (state === 'title') return;
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+function showTitle() {
+  state = 'title';
+  canvas.style.display = 'none';
+  const ts = document.getElementById('title-screen');
+  ts.style.display = 'flex';
+}
+
+// ── Collision helpers ─────────────────────────────────────────────────────────
+function rectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+
+function wallsForRoom(r) {
+  return rooms[r].walls.map(w => ({
+    x: w.x*GX, y: w.y*GX, w: w.w*GX, h: w.h*GX
+  }));
+}
+
+// Returns pixel rects of open door gaps for a room so wall collision can ignore them.
+function doorGapsForRoom(r) {
+  const gaps = [];
+  const exits = rooms[r].exits;
+  // Gap is 3 grid units wide, centred on the wall.
+  const gapHalf = GX * 1.5;
+  if (exits.N !== undefined) gaps.push({ x: PW/2 - gapHalf, y: 0,      w: gapHalf*2, h: GX });
+  if (exits.S !== undefined) gaps.push({ x: PW/2 - gapHalf, y: PH - GX, w: gapHalf*2, h: GX });
+  if (exits.W !== undefined) gaps.push({ x: 0,       y: PH/2 - gapHalf, w: GX, h: gapHalf*2 });
+  if (exits.E !== undefined) gaps.push({ x: PW - GX, y: PH/2 - gapHalf, w: GX, h: gapHalf*2 });
+  return gaps;
+}
+
+function collideWalls(ox, oy, nx, ny, w, h, room) {
+  const walls = wallsForRoom(room);
+  const gaps  = doorGapsForRoom(room);
+  for (const wall of walls) {
+    if (!rectOverlap(nx, ny, w, h, wall.x, wall.y, wall.w, wall.h)) continue;
+    // Allow passage if the player rect is fully inside a door gap on this wall
+    const inGap = gaps.some(g => rectOverlap(nx, ny, w, h, g.x, g.y, g.w, g.h));
+    if (!inGap) return true;
+  }
+  return false;
+}
+
+// ── Exits / Doors ─────────────────────────────────────────────────────────────
+// Exit triggers: player reaches edge of screen
+function checkExit() {
+  const r = rooms[player.room];
+  const exits = r.exits;
+  const locked = r.locked;
+  const pw = player.w, ph = player.h;
+
+  let dir = null;
+  if (player.x < 0) dir = 'W';
+  else if (player.x + pw > PW) dir = 'E';
+  else if (player.y < 0) dir = 'N';
+  else if (player.y + ph > PH) dir = 'S';
+
+  if (!dir) return;
+
+  if (exits[dir] === undefined) {
+    // Wall — push back
+    if (dir === 'W') player.x = 0;
+    if (dir === 'E') player.x = PW - pw;
+    if (dir === 'N') player.y = 0;
+    if (dir === 'S') player.y = PH - ph;
+    return;
+  }
+
+  // Check lock
+  if (locked[dir]) {
+    const needed = locked[dir];
+    if (carrying !== needed) {
+      // Bounce back
+      if (dir === 'W') player.x = GX;
+      if (dir === 'E') player.x = PW - pw - GX;
+      if (dir === 'N') player.y = GX;
+      if (dir === 'S') player.y = PH - ph - GX;
+      flashTimer = 30; // flash door
+      return;
+    }
+  }
+
+  // Transition
+  const nextRoom = exits[dir];
+  player.room = nextRoom;
+  visitedRooms.add(nextRoom);
+
+  // Carry item to new room
+  if (dir === 'W') { player.x = PW - pw - GX; }
+  if (dir === 'E') { player.x = GX; }
+  if (dir === 'N') { player.y = PH - ph - GX; }
+  if (dir === 'S') { player.y = GX; }
+}
+
+// ── Interact ──────────────────────────────────────────────────────────────────
+function interact() {
+  if (carrying) {
+    // Drop item in current room
+    roomItems[player.room].push(carrying);
+    carrying = null;
+    return;
+  }
+  // Pick up nearest item in room
+  const items = roomItems[player.room];
+  if (items.length === 0) return;
+
+  // Find closest
+  let best = null, bestDist = Infinity;
+  for (const id of items) {
+    const pos = getItemPos(player.room, id);
+    const dx = pos.x - player.x, dy = pos.y - player.y;
+    const d = dx*dx + dy*dy;
+    if (d < bestDist && d < (GX*3)*(GX*3)) { bestDist = d; best = id; }
+  }
+  if (best) {
+    roomItems[player.room] = items.filter(i => i !== best);
+    carrying = best;
+  }
+}
+
+// Item positions (stable, keyed by room+itemId)
+const itemPositions = {}; // roomIdx_itemId -> {x,y}
+function strHash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h*31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+function getItemPos(room, id) {
+  const key = `${room}_${id}`;
+  if (!itemPositions[key]) {
+    const slots = [
+      {x:5*GX,y:5*GX},{x:10*GX,y:7*GX},{x:14*GX,y:5*GX},
+      {x:7*GX,y:10*GX},{x:12*GX,y:10*GX},{x:4*GX,y:8*GX},
+    ];
+    const idx = strHash(key) % slots.length;
+    itemPositions[key] = { x: slots[idx].x, y: slots[idx].y };
+  }
+  return itemPositions[key];
+}
+
+// ── Dragon AI ─────────────────────────────────────────────────────────────────
+const DRAGON_SPEED = 2.0;
+
+function updateDragon(d) {
+  if (!d.alive) return;
+
+  d.timer -= 1;
+
+  const hasSword = carrying === 'sword';
+  const sameRoom = d.room === player.room;
+
+  if (sameRoom && hasSword && d.fearsSword) {
+    // Flee player
+    const dx = d.x - player.x, dy = d.y - player.y;
+    const len = Math.sqrt(dx*dx+dy*dy) || 1;
+    d.x += (dx/len)*d.speed*1.5;
+    d.y += (dy/len)*d.speed*1.5;
+    d.x = Math.max(GX, Math.min(PW-GX*2, d.x));
+    d.y = Math.max(GX, Math.min(PH-GX*2, d.y));
+    return;
+  }
+
+  if (sameRoom) {
+    // Chase player
+    const dx = player.x - d.x, dy = player.y - d.y;
+    const len = Math.sqrt(dx*dx+dy*dy) || 1;
+    d.x += (dx/len)*d.speed;
+    d.y += (dy/len)*d.speed;
+
+    // Check if dragon catches player
+    if (rectOverlap(d.x, d.y, GX*1.5, GX*1.5, player.x, player.y, player.w, player.h)) {
+      // Dragon has item? Drop it. Player is eaten.
+      if (d.carrying) {
+        roomItems[d.room].push(d.carrying);
+        d.carrying = null;
+      }
+      gameOverMsg = `${d.name} ate you!`;
+      state = 'gameover';
+    }
+
+    // Sword kills dragon
+    if (hasSword && rectOverlap(player.x, player.y, player.w, player.h, d.x, d.y, GX*1.5, GX*1.5)) {
+      d.alive = false;
+      if (d.carrying) {
+        roomItems[d.room].push(d.carrying);
+        d.carrying = null;
+      }
+    }
+  } else {
+    // Wander in home room or occasionally chase player's room
+    if (d.timer <= 0) {
+      d.timer = 60 + Math.random()*120;
+      if (Math.random() < 0.3) {
+        // Move toward player's room
+        d.room = player.room;
+        d.x = PW/2; d.y = PH/2;
+      } else {
+        d.targetX = GX + Math.random()*(PW-GX*3);
+        d.targetY = GX + Math.random()*(PH-GX*3);
+      }
+    }
+    if (d.targetX !== undefined) {
+      const dx = d.targetX - d.x, dy = d.targetY - d.y;
+      const len = Math.sqrt(dx*dx+dy*dy) || 1;
+      if (len > 2) {
+        d.x += (dx/len)*d.speed*0.5;
+        d.y += (dy/len)*d.speed*0.5;
+      }
+    }
+    // Dragons sometimes pick up items
+    const items = roomItems[d.room];
+    if (items.length > 0 && !d.carrying && Math.random() < 0.005) {
+      d.carrying = items.pop();
+    }
+  }
+}
+
+// ── Win condition ─────────────────────────────────────────────────────────────
+function checkWin() {
+  // Player must carry chalice into room 0 (Yellow Castle)
+  if (carrying === 'chalice' && player.room === 4) {
+    won = true;
+    state = 'win';
+  }
+  // Or return to start room 0 with chalice
+  if (carrying === 'chalice' && player.room === 0) {
+    won = true;
+    state = 'win';
+  }
+}
+
+// ── Update ─────────────────────────────────────────────────────────────────────
+const SPEED = 3;
+function update() {
+  if (state !== 'playing') return;
+
+  // Player movement
+  let dx = 0, dy = 0;
+  if (keys['ArrowLeft']  || keys['a']) { dx = -SPEED; player.facing = 'W'; }
+  if (keys['ArrowRight'] || keys['d']) { dx =  SPEED; player.facing = 'E'; }
+  if (keys['ArrowUp']    || keys['w']) { dy = -SPEED; player.facing = 'N'; }
+  if (keys['ArrowDown']  || keys['s']) { dy =  SPEED; player.facing = 'S'; }
+  if (dx && dy) { // diagonal: last key wins for facing, normalize speed
+    if (keys['ArrowLeft'] || keys['a']) player.facing = 'W';
+    if (keys['ArrowRight']|| keys['d']) player.facing = 'E';
+    dx *= 0.707; dy *= 0.707;
+  }
+  if (dx !== 0 || dy !== 0) stepCount++;
+
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+
+  if (!collideWalls(player.x, player.y, nx, player.y, player.w, player.h, player.room))
+    player.x = nx;
+  if (!collideWalls(player.x, player.y, player.x, ny, player.w, player.h, player.room))
+    player.y = ny;
+
+  checkExit();
+  checkWin();
+
+  // Update dragons
+  dragons.forEach(updateDragon);
+
+  if (flashTimer > 0) flashTimer--;
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────────
+function drawRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+}
+
+function drawWalls(room) {
+  ctx.fillStyle = rooms[room].color;
+  for (const w of rooms[room].walls) {
+    ctx.fillRect(w.x*GX, w.y*GX, w.w*GX, w.h*GX);
+  }
+}
+
+function drawPlayer() {
+  ctx.fillStyle = C.red;
+  ctx.fillRect(player.x, player.y, player.w, player.h);
+}
+
+function drawItemShape(shape, x, y, color) {
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  const s = GX * 0.8;
+
+  switch (shape) {
+    case 'sword':
+      // Simple sword: vertical rectangle with crossguard
+      ctx.fillRect(x + s*0.4, y, s*0.2, s*0.8);
+      ctx.fillRect(x, y + s*0.2, s, s*0.15);
+      ctx.fillRect(x+s*0.3, y+s*0.8, s*0.4, s*0.25);
+      break;
+    case 'key':
+      // Simple key shape
+      ctx.beginPath();
+      ctx.arc(x+s*0.3, y+s*0.3, s*0.28, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.fillRect(x+s*0.5, y+s*0.2, s*0.5, s*0.15);
+      ctx.fillRect(x+s*0.75, y+s*0.35, s*0.15, s*0.15);
+      ctx.fillRect(x+s*0.9, y+s*0.35, s*0.1, s*0.15);
+      break;
+    case 'bridge':
+      // Horizontal bridge planks
+      ctx.fillRect(x, y+s*0.1, s, s*0.15);
+      ctx.fillRect(x, y+s*0.4, s, s*0.15);
+      ctx.fillRect(x, y+s*0.7, s, s*0.15);
+      ctx.fillRect(x, y+s*0.1, s*0.12, s*0.75);
+      ctx.fillRect(x+s*0.88, y+s*0.1, s*0.12, s*0.75);
+      break;
+    case 'chalice':
+      // Cup shape
+      ctx.beginPath();
+      ctx.moveTo(x+s*0.1, y+s*0.1);
+      ctx.lineTo(x+s*0.9, y+s*0.1);
+      ctx.lineTo(x+s*0.7, y+s*0.6);
+      ctx.lineTo(x+s*0.6, y+s*0.6);
+      ctx.lineTo(x+s*0.6, y+s*0.8);
+      ctx.lineTo(x+s*0.8, y+s*0.8);
+      ctx.lineTo(x+s*0.8, y+s*0.95);
+      ctx.lineTo(x+s*0.2, y+s*0.95);
+      ctx.lineTo(x+s*0.2, y+s*0.8);
+      ctx.lineTo(x+s*0.4, y+s*0.8);
+      ctx.lineTo(x+s*0.4, y+s*0.6);
+      ctx.lineTo(x+s*0.3, y+s*0.6);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    case 'magnet':
+      // U shape
+      ctx.beginPath();
+      ctx.arc(x+s*0.5, y+s*0.5, s*0.35, Math.PI, 0);
+      ctx.lineWidth = s*0.2;
+      ctx.stroke();
+      ctx.fillRect(x+s*0.12, y+s*0.5, s*0.2, s*0.35);
+      ctx.fillRect(x+s*0.68, y+s*0.5, s*0.2, s*0.35);
+      ctx.fillStyle = C.red;
+      ctx.fillRect(x+s*0.12, y+s*0.8, s*0.2, s*0.12);
+      ctx.fillStyle = C.white;
+      ctx.fillRect(x+s*0.68, y+s*0.8, s*0.2, s*0.12);
+      break;
+    case 'dot':
+      ctx.beginPath();
+      ctx.arc(x+s*0.5, y+s*0.5, s*0.25, 0, Math.PI*2);
+      ctx.fill();
+      break;
+    default:
+      ctx.fillRect(x, y, s, s);
+  }
+}
+
+function drawItems(room) {
+  const items = roomItems[room];
+  items.forEach((id, idx) => {
+    const pos = getItemPos(room, id);
+    const item = ITEMS[id];
+    drawItemShape(item.shape, pos.x, pos.y, item.color);
+  });
+}
+
+function drawCarried() {
+  if (!carrying) return;
+  const item = ITEMS[carrying];
+  drawItemShape(item.shape, player.x + GX*0.6, player.y - GX*0.5, item.color);
+}
+
+function drawDragon(d) {
+  if (!d.alive) return;
+  if (d.room !== player.room) return;
+
+  ctx.fillStyle = d.color;
+  const s = GX * 1.5;
+  // Body
+  ctx.fillRect(d.x, d.y + s*0.3, s*0.7, s*0.4);
+  // Head
+  ctx.fillRect(d.x + s*0.7, d.y + s*0.1, s*0.3, s*0.35);
+  // Jaw
+  ctx.fillRect(d.x + s*0.7, d.y + s*0.38, s*0.35, s*0.18);
+  // Legs
+  ctx.fillRect(d.x + s*0.1, d.y + s*0.65, s*0.15, s*0.35);
+  ctx.fillRect(d.x + s*0.4, d.y + s*0.65, s*0.15, s*0.35);
+  // Tail
+  ctx.fillRect(d.x - s*0.2, d.y + s*0.45, s*0.25, s*0.15);
+  // Eye
+  ctx.fillStyle = C.red;
+  ctx.fillRect(d.x + s*0.78, d.y + s*0.15, s*0.08, s*0.08);
+
+  // Carried item indicator
+  if (d.carrying) {
+    ctx.fillStyle = ITEMS[d.carrying].color;
+    ctx.fillRect(d.x + s*0.25, d.y - s*0.2, s*0.2, s*0.2);
+  }
+}
+
+function drawDoors() {
+  const r = rooms[player.room];
+  const locked = r.locked;
+  const exits = r.exits;
+  const flash = flashTimer > 0 && (flashTimer % 6 < 3);
+
+  // Draw exit openings as gaps and locked doors as colored bars
+  for (const [dir, target] of Object.entries(exits)) {
+    const lk = locked[dir];
+    const color = lk ? (flash ? C.white : (ITEMS[lk]?.color || C.white)) : null;
+
+    if (dir === 'N') {
+      // Clear opening in north wall
+      if (!lk || (carrying === lk)) {
+        drawRect(PW/2 - GX*1.5, 0, GX*3, GX, C.black);
+      }
+      if (lk) {
+        drawRect(PW/2 - GX*1.5, 0, GX*3, GX, color);
+      }
+    }
+    if (dir === 'S') {
+      if (!lk || (carrying === lk)) {
+        drawRect(PW/2 - GX*1.5, PH - GX, GX*3, GX, C.black);
+      }
+      if (lk) {
+        drawRect(PW/2 - GX*1.5, PH - GX, GX*3, GX, color);
+      }
+    }
+    if (dir === 'W') {
+      if (!lk || (carrying === lk)) {
+        drawRect(0, PH/2 - GX*1.5, GX, GX*3, C.black);
+      }
+      if (lk) {
+        drawRect(0, PH/2 - GX*1.5, GX, GX*3, color);
+      }
+    }
+    if (dir === 'E') {
+      if (!lk || (carrying === lk)) {
+        drawRect(PW - GX, PH/2 - GX*1.5, GX, GX*3, C.black);
+      }
+      if (lk) {
+        drawRect(PW - GX, PH/2 - GX*1.5, GX, GX*3, color);
+      }
+    }
+  }
+}
+
+// ── Minimap ───────────────────────────────────────────────────────────────────
+// Grid positions for each room [col, row] (layout matches the room graph topology)
+const ROOM_GRID = [
+//  0       1       2       3       4       5       6       7       8       9      10      11      12      13      14
+  [2,3],  [3,3],  [4,3],  [5,3],  [2,2],  [3,2],  [4,2],  [4,4],  [5,2],  [3,1],  [3,4],  [4,5],  [6,2],  [3,0],  [4,5.8],
+];
+const MM_CELL = 14;   // px per room cell on minimap
+const MM_PAD  = 6;    // padding inside minimap border
+const MM_COLS = 8;
+const MM_ROWS = 7;
+const MM_W = MM_COLS * MM_CELL + MM_PAD * 2;
+const MM_H = MM_ROWS * MM_CELL + MM_PAD * 2 + 14; // +14 for title
+
+function drawMinimap() {
+  if (!showMinimap) return;
+
+  const mx = W - MM_W - 8;
+  const my = 8;
+
+  // Background panel
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(mx, my, MM_W, MM_H);
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(mx + 0.5, my + 0.5, MM_W - 1, MM_H - 1);
+
+  // Title
+  ctx.fillStyle = '#aaa';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('MAP', mx + MM_W / 2, my + 11);
+
+  const ox = mx + MM_PAD;
+  const oy = my + MM_PAD + 14;
+
+  // Draw connections first (under rooms)
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < rooms.length; i++) {
+    if (!visitedRooms.has(i)) continue;
+    const [ac, ar] = ROOM_GRID[i];
+    const ax = ox + ac * MM_CELL + MM_CELL / 2;
+    const ay = oy + ar * MM_CELL + MM_CELL / 2;
+    for (const [dir, j] of Object.entries(rooms[i].exits)) {
+      if (!visitedRooms.has(j)) continue;
+      const [bc, br] = ROOM_GRID[j];
+      const bx = ox + bc * MM_CELL + MM_CELL / 2;
+      const by = oy + br * MM_CELL + MM_CELL / 2;
+      // Color locked connections
+      const lk = rooms[i].locked[dir];
+      ctx.strokeStyle = lk ? (ITEMS[lk]?.color || '#888') : '#444';
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+    }
+  }
+
+  // Draw room nodes
+  const nodeR = Math.floor(MM_CELL * 0.36);
+  for (let i = 0; i < rooms.length; i++) {
+    const [c, r] = ROOM_GRID[i];
+    const rx = ox + c * MM_CELL + MM_CELL / 2;
+    const ry = oy + r * MM_CELL + MM_CELL / 2;
+
+    if (!visitedRooms.has(i)) {
+      // Show unknown rooms as faint dots
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.arc(rx, ry, nodeR * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+
+    // Room fill = room's color, dimmed
+    ctx.fillStyle = rooms[i].color;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.arc(rx, ry, nodeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Border
+    ctx.strokeStyle = i === player.room ? C.white : '#666';
+    ctx.lineWidth = i === player.room ? 2 : 1;
+    ctx.beginPath();
+    ctx.arc(rx, ry, nodeR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Player dot on current room
+  const [pc, pr] = ROOM_GRID[player.room];
+  const px = ox + pc * MM_CELL + MM_CELL / 2;
+  const py = oy + pr * MM_CELL + MM_CELL / 2;
+  ctx.fillStyle = C.red;
+  ctx.beginPath();
+  ctx.arc(px, py, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Dragon dots
+  for (const d of dragons) {
+    if (!d.alive || !visitedRooms.has(d.room)) continue;
+    const [dc, dr] = ROOM_GRID[d.room];
+    const ddx = ox + dc * MM_CELL + MM_CELL / 2 + 4;
+    const ddy = oy + dr * MM_CELL + MM_CELL / 2 - 4;
+    ctx.fillStyle = d.color;
+    ctx.beginPath();
+    ctx.arc(ddx, ddy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.textAlign = 'left'; // reset
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────────
+function render() {
+  // Background
+  ctx.fillStyle = C.black;
+  ctx.fillRect(0, 0, W, H);
+
+  if (state === 'playing' || state === 'gameover' || state === 'win') {
+    const room = player.room;
+
+    // Room background tint
+    drawRect(0, 0, PW, PH, C.black);
+
+    // Walls
+    drawWalls(room);
+
+    // Doors / exits
+    drawDoors();
+
+    // Items
+    drawItems(room);
+
+    // Dragons
+    dragons.forEach(drawDragon);
+
+    // Player
+    drawPlayer();
+
+    // Carried item (above player)
+    drawCarried();
+
+    // Minimap (drawn before room name so name sits on top)
+    drawMinimap();
+
+    // Room name
+    if (showNames) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, W, 22);
+      ctx.fillStyle = C.white;
+      ctx.font = '14px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(rooms[room].name, W/2, 15);
+    }
+
+    // HUD
+    const uiEl = document.getElementById('ui');
+    const inv = carrying ? `Carrying: ${ITEMS[carrying].name}` : 'Carrying: nothing';
+    const alive = dragons.filter(d=>d.alive).map(d=>d.name).join(', ') || 'all slain';
+    uiEl.textContent = `Game ${gameNumber}  |  Room: ${rooms[room].name}  |  ${inv}  |  Dragons: ${alive}  |  [N] names  [M] map  [Space] pickup/drop`;
+  }
+
+  if (state === 'gameover') {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = C.red;
+    ctx.font = 'bold 36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', W/2, H/2 - 20);
+    ctx.fillStyle = C.white;
+    ctx.font = '18px monospace';
+    ctx.fillText(gameOverMsg, W/2, H/2 + 16);
+    ctx.fillStyle = C.ltgray;
+    ctx.font = '14px monospace';
+    ctx.fillText('Press R to return to title', W/2, H/2 + 50);
+  }
+
+  if (state === 'win') {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = C.gold;
+    ctx.font = 'bold 36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('YOU WIN!', W/2, H/2 - 20);
+    ctx.fillStyle = C.white;
+    ctx.font = '18px monospace';
+    ctx.fillText('The Enchanted Chalice is returned!', W/2, H/2 + 16);
+    ctx.fillStyle = C.ltgray;
+    ctx.font = '14px monospace';
+    ctx.fillText('Press R to return to title', W/2, H/2 + 50);
+  }
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+canvas.style.display = 'none';
+const ts = document.getElementById('title-screen');
+ts.style.display = 'flex';
+loop();
+</script>
+</body>
+</html>
